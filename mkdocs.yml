@@ -1,8 +1,8 @@
 site_name: aioq
 site_description: Async job queue for Python with multiple backends and a built-in dashboard
-site_url: https://ykus4.github.io/aioq
-repo_url: https://github.com/ykus4/aioq
-repo_name: ykus4/aioq
+site_url: https://qusamulab.github.io/aioq
+repo_url: https://github.com/qusamulab/aioq
+repo_name: qusamulab/aioq
 edit_uri: edit/main/docs/
 
 theme:

@@ -2,7 +2,7 @@
 
 Async job queue for Python with Redis, PostgreSQL and MySQL backends, job timeouts, retries with exponential backoff, priority queues, job dependencies, dead letter queues, cron scheduling, and a built-in real-time dashboard.
 
-**[Documentation](https://ykus4.github.io/aioq/)** · [PyPI](https://pypi.org/project/aioq/)
+**[Documentation](https://qusamulab.github.io/aioq/)** · [PyPI](https://pypi.org/project/aioq/)
 
 ## Install
 
@@ -42,7 +42,7 @@ from aioq.backends import MemoryBroker
 app = Aioq(broker=MemoryBroker())
 ```
 
-See the **[docs](https://ykus4.github.io/aioq/)** for full usage.
+See the **[docs](https://qusamulab.github.io/aioq/)** for full usage.
 
 ## License
 
