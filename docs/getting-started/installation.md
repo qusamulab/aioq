@@ -48,7 +48,7 @@ uv add "aioq[all]"
 ## Development install
 
 ```bash
-git clone https://github.com/ykus4/aioq
+git clone https://github.com/qusamulab/aioq
 cd aioq
 uv sync --extra dev
 ```
