@@ -75,13 +75,6 @@ CREATE TABLE IF NOT EXISTS aioq_cron_locks (
 );
 """
 
-_JOB_COLUMNS = """
-    id, task_name, queue, status, args, kwargs,
-    retries, max_retries, retry_delay, retry_backoff, retry_backoff_max, timeout,
-    enqueued_at, run_at, priority, save_result, result_ttl,
-    dead_letter_queue, depends_on
-"""
-
 
 class PostgresBroker(SQLBroker):
     def __init__(self, dsn: str, min_size: int = 2, max_size: int = 10):
@@ -130,9 +123,12 @@ class PostgresBroker(SQLBroker):
                 await self._promote_if_ready(job)
 
     async def _upsert(self, job: Job, conn: asyncpg.Connection | None = None) -> None:
+        row = self.job_to_row(job)
+        columns = ", ".join(row)
+        placeholders = ", ".join(f"${i}" for i in range(1, len(row) + 1))
         sql = f"""
-            INSERT INTO aioq_jobs ({_JOB_COLUMNS})
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+            INSERT INTO aioq_jobs ({columns})
+            VALUES ({placeholders})
             ON CONFLICT (id) DO UPDATE SET
                 status     = EXCLUDED.status,
                 queue      = EXCLUDED.queue,
@@ -141,27 +137,7 @@ class PostgresBroker(SQLBroker):
                 priority   = EXCLUDED.priority,
                 depends_on = EXCLUDED.depends_on
         """
-        params = (
-            job.id,
-            job.task_name,
-            job.queue,
-            job.status.value,
-            json.dumps(job.args),
-            json.dumps(job.kwargs),
-            job.retries,
-            job.max_retries,
-            job.retry_delay,
-            job.retry_backoff,
-            job.retry_backoff_max,
-            job.timeout,
-            job.enqueued_at,
-            job.run_at,
-            job.priority,
-            job.save_result,
-            job.result_ttl,
-            job.dead_letter_queue,
-            json.dumps(job.depends_on),
-        )
+        params = tuple(row.values())
         if conn is not None:
             await conn.execute(sql, *params)
         else:
@@ -314,11 +290,6 @@ class PostgresBroker(SQLBroker):
                 "UPDATE aioq_jobs SET status = 'pending' WHERE id = $1 AND status = 'waiting'",
                 job_id,
             )
-
-    async def _promote_if_ready(self, job: Job) -> None:
-        if await self._all_deps_completed(job.depends_on):
-            await self._mark_waiting_as_pending(job.id)
-            job.status = JobStatus.pending
 
     # ------------------------------------------------------------------
     # Stats

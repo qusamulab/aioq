@@ -101,6 +101,37 @@ class SQLBroker(BaseBroker):
     # Row mapping
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def job_to_row(job: Job) -> dict[str, Any]:
+        """Serialize the columns persisted by enqueue(), in parameter order.
+
+        JSON encoding is shared; timestamps and booleans retain their native
+        types so each driver can apply its own storage conversions. Derive
+        both INSERT columns and parameters from this mapping to keep them in
+        sync when adding fields.
+        """
+        return {
+            "id": job.id,
+            "task_name": job.task_name,
+            "queue": job.queue,
+            "status": job.status.value,
+            "args": json.dumps(job.args),
+            "kwargs": json.dumps(job.kwargs),
+            "retries": job.retries,
+            "max_retries": job.max_retries,
+            "retry_delay": job.retry_delay,
+            "retry_backoff": job.retry_backoff,
+            "retry_backoff_max": job.retry_backoff_max,
+            "timeout": job.timeout,
+            "enqueued_at": job.enqueued_at,
+            "run_at": job.run_at,
+            "priority": job.priority,
+            "save_result": job.save_result,
+            "result_ttl": job.result_ttl,
+            "dead_letter_queue": job.dead_letter_queue,
+            "depends_on": json.dumps(job.depends_on),
+        }
+
     @classmethod
     def row_to_job(cls, row: Mapping[str, Any]) -> Job:
         """Map a jobs-table row onto a :class:`~aioq.models.Job`.
@@ -156,6 +187,12 @@ class SQLBroker(BaseBroker):
     # ------------------------------------------------------------------
     # Dependency resolution
     # ------------------------------------------------------------------
+
+    async def _promote_if_ready(self, job: Job) -> None:
+        """Recheck dependencies that may have completed during enqueue()."""
+        if await self._all_deps_completed(job.depends_on):
+            await self._mark_waiting_as_pending(job.id)
+            job.status = JobStatus.pending
 
     async def _resolve_dependents(self, completed_job_id: str) -> None:
         """Promote every waiting job whose last dependency just completed."""

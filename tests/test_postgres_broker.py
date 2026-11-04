@@ -108,24 +108,36 @@ async def test_disconnect_closes_the_pool(broker):
 # ----------------------------------------------------------------------
 
 
-async def test_enqueue_upserts_with_every_column(broker):
-    job = make_job(
-        timeout=30,
-        retry_backoff=True,
-        dead_letter_queue="dlq",
-        save_result=True,
-        result_ttl=60,
+@pytest.mark.parametrize("configured", [False, True])
+async def test_enqueue_upserts_with_every_column(broker, configured):
+    options = (
+        {
+            "args": [0, False, "日本語"],
+            "kwargs": {"nested": {"value": None}},
+            "max_retries": 5,
+            "retry_delay": 7.5,
+            "retry_backoff_max": 90,
+            "timeout": 30,
+            "retry_backoff": True,
+            "dead_letter_queue": "dlq",
+            "save_result": True,
+            "result_ttl": 60,
+            "priority": 10,
+            "run_at": datetime(2026, 1, 1, tzinfo=UTC),
+            "depends_on": ["parent"],
+        }
+        if configured
+        else {}
     )
+    job = make_job(**options)
     await broker.enqueue(job)
 
     sql, *params = broker.mock_conn.execute.call_args[0]
     assert "INSERT INTO aioq_jobs" in sql
     assert "ON CONFLICT (id) DO UPDATE" in sql
-    # The columns that used to be silently dropped are now persisted.
-    for column in ("dead_letter_queue", "timeout", "retry_backoff", "result_ttl"):
-        assert column in sql
-    assert "dlq" in params
-    assert 30.0 in params or 30 in params
+    columns = sql.split("INSERT INTO aioq_jobs (")[1].split(")")[0]
+    row = dict(zip((column.strip() for column in columns.split(",")), params, strict=True))
+    assert broker.row_to_job(full_row(**row)) == job
 
 
 async def test_enqueue_placeholder_count_matches_columns(broker):

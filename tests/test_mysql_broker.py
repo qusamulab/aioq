@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -141,7 +141,8 @@ async def test_disconnect_closes_pool(broker_cls, patch_aiomysql):
     assert broker._pool is None
 
 
-async def test_enqueue_executes_insert(broker_cls, patch_aiomysql):
+@pytest.mark.parametrize("configured", [False, True])
+async def test_enqueue_executes_insert(broker_cls, patch_aiomysql, configured):
     """enqueue() runs an INSERT ... ON DUPLICATE KEY UPDATE statement."""
     pool_mock, _, cursor_mock = _make_pool_mock()
     patch_aiomysql.create_pool = AsyncMock(return_value=pool_mock)
@@ -151,14 +152,48 @@ async def test_enqueue_executes_insert(broker_cls, patch_aiomysql):
 
     from aioq.models import Job  # noqa: PLC0415
 
-    job = Job(task_name="tasks.add", queue="default", kwargs={"x": 1})
+    local_time = datetime(2026, 1, 1, 9, tzinfo=timezone(timedelta(hours=9)))
+    options = (
+        {
+            "args": [0, False, "日本語"],
+            "kwargs": {"nested": {"value": None}},
+            "max_retries": 5,
+            "retry_delay": 7.5,
+            "retry_backoff": True,
+            "retry_backoff_max": 90,
+            "timeout": 30,
+            "save_result": True,
+            "result_ttl": 60,
+            "priority": 10,
+            "dead_letter_queue": "dlq",
+            "enqueued_at": local_time,
+            "run_at": local_time,
+        }
+        if configured
+        else {}
+    )
+    job = Job(task_name="tasks.add", queue="default", **options)
     await broker.enqueue(job)
 
     cursor_mock.execute.assert_awaited()
     sql, params = cursor_mock.execute.call_args[0]
     assert "INSERT INTO aioq_jobs" in sql
     assert "ON DUPLICATE KEY UPDATE" in sql
-    assert job.id in params
+    columns = sql.split("INSERT INTO aioq_jobs (")[1].split(")")[0]
+    row = dict(zip((column.strip() for column in columns.split(",")), params, strict=True))
+    assert sql.split("VALUES (")[1].split(")")[0].count("%s") == len(params)
+    assert row["enqueued_at"].tzinfo is None
+    assert type(row["retry_backoff"]) is int
+    assert type(row["save_result"]) is int
+    stored = {
+        "started_at": None,
+        "completed_at": None,
+        "result": None,
+        "error": None,
+        "worker_id": None,
+        **row,
+    }
+    assert broker.row_to_job(stored) == job
 
 
 async def test_row_to_job_converts_dict(broker_cls):

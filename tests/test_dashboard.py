@@ -6,8 +6,12 @@ the actual pages and exercise the JSON API so template regressions show up.
 
 from __future__ import annotations
 
+import json
+from unittest.mock import AsyncMock
+
 import httpx
 import pytest
+from fastapi import Request
 
 from aioq import Aioq
 from aioq.backends.memory import MemoryBroker
@@ -128,6 +132,31 @@ async def test_api_stats(broker, client):
     assert body["workers"][0]["worker_id"] == "w1"
 
 
+async def test_sse_stream_matches_api_stats_and_stops_on_disconnect(
+    app, broker, client, monkeypatch
+):
+    await seed(broker)
+    await broker.register_worker("w1", ["default"])
+    expected = (await client.get("/api/stats")).json()
+    dashboard = create_dashboard(app)
+    endpoint = next(route.endpoint for route in dashboard.routes if route.path == "/sse/stats")
+    request = AsyncMock(spec=Request)
+    request.is_disconnected.side_effect = [False, True]
+    monkeypatch.setattr("aioq.dashboard.monitoring._SSE_INTERVAL", 0)
+
+    response = await endpoint(request)
+    stream = response.body_iterator
+    event = await anext(stream)
+
+    assert event.startswith("data: ") and event.endswith("\n\n")
+    assert json.loads(event.removeprefix("data: ")) == expected
+    assert response.media_type == "text/event-stream"
+    assert response.headers["Cache-Control"] == "no-cache"
+    assert response.headers["X-Accel-Buffering"] == "no"
+    with pytest.raises(StopAsyncIteration):
+        await anext(stream)
+
+
 async def test_api_jobs(broker, client):
     job = await seed(broker, kwargs={"a": 1})
 
@@ -238,6 +267,41 @@ async def test_replay_endpoint_conflicts_on_live_job(broker, client):
 # ----------------------------------------------------------------------
 # Configuration
 # ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("path", ["/jobs", "/api/jobs", "/api/stats", "/metrics"])
+async def test_dashboards_keep_their_brokers_and_metrics_isolated(path):
+    async with MemoryBroker() as first, MemoryBroker() as second:
+        await seed(first, queue="first-queue")
+        await seed(second, queue="second-queue")
+        first_transport = httpx.ASGITransport(app=create_dashboard(Aioq(broker=first)))
+        second_transport = httpx.ASGITransport(app=create_dashboard(Aioq(broker=second)))
+        async with (
+            httpx.AsyncClient(transport=first_transport, base_url="http://first") as first_client,
+            httpx.AsyncClient(
+                transport=second_transport, base_url="http://second"
+            ) as second_client,
+        ):
+            for selected_client, expected, unexpected in (
+                (first_client, "first-queue", "second-queue"),
+                (second_client, "second-queue", "first-queue"),
+                (first_client, "first-queue", "second-queue"),
+            ):
+                response = await selected_client.get(path)
+                assert response.status_code == 200
+                assert expected in response.text
+                assert unexpected not in response.text
+
+
+async def test_dashboard_without_prometheus_keeps_serving_other_routes(app, monkeypatch):
+    monkeypatch.setattr("aioq.dashboard.monitoring._PROMETHEUS_AVAILABLE", False)
+    transport = httpx.ASGITransport(app=create_dashboard(app))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/metrics")
+        assert response.status_code == 501
+        assert response.json()["detail"] == "prometheus-client not installed"
+        assert (await client.get("/api/stats")).status_code == 200
+        assert (await client.get("/")).status_code == 200
 
 
 def test_create_dashboard_refuses_when_disabled():

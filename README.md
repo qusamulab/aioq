@@ -44,6 +44,11 @@ app = Aioq(broker=MemoryBroker())
 
 See the **[docs](https://qusamulab.github.io/aioq/)** for full usage.
 
+## Development
+
+See the [development guide](docs/development.md) for the package structure,
+module responsibilities, and local verification commands.
+
 ## License
 
 MIT
