@@ -84,13 +84,6 @@ _CREATE_INDEXES = [
     ("aioq_jobs_claim", "aioq_jobs", "(queue, status, priority, enqueued_at)"),
 ]
 
-_JOB_COLUMNS = """
-    id, task_name, queue, status, args, kwargs,
-    retries, max_retries, retry_delay, retry_backoff, retry_backoff_max, timeout,
-    enqueued_at, run_at, priority, save_result, result_ttl,
-    dead_letter_queue, depends_on
-"""
-
 
 async def _scalar(cur) -> Any:
     """Read the single value of a one-column, one-row result."""
@@ -198,11 +191,18 @@ class MySQLBroker(SQLBroker):
             if job.status == JobStatus.waiting:
                 await self._promote_if_ready(job)
 
-    @staticmethod
-    def _upsert_sql(job: Job) -> tuple[str, tuple]:
+    @classmethod
+    def _upsert_sql(cls, job: Job) -> tuple[str, tuple]:
+        row = cls.job_to_row(job)
+        row["enqueued_at"] = _naive(job.enqueued_at)
+        row["run_at"] = _naive(job.run_at)
+        row["retry_backoff"] = int(job.retry_backoff)
+        row["save_result"] = int(job.save_result)
+        columns = ", ".join(row)
+        placeholders = ", ".join(["%s"] * len(row))
         sql = f"""
-            INSERT INTO aioq_jobs ({_JOB_COLUMNS})
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            INSERT INTO aioq_jobs ({columns})
+            VALUES ({placeholders})
             ON DUPLICATE KEY UPDATE
                 status = VALUES(status),
                 queue = VALUES(queue),
@@ -211,28 +211,7 @@ class MySQLBroker(SQLBroker):
                 priority = VALUES(priority),
                 depends_on = VALUES(depends_on)
         """
-        params = (
-            job.id,
-            job.task_name,
-            job.queue,
-            job.status.value,
-            json.dumps(job.args),
-            json.dumps(job.kwargs),
-            job.retries,
-            job.max_retries,
-            job.retry_delay,
-            int(job.retry_backoff),
-            job.retry_backoff_max,
-            job.timeout,
-            _naive(job.enqueued_at),
-            _naive(job.run_at),
-            job.priority,
-            int(job.save_result),
-            job.result_ttl,
-            job.dead_letter_queue,
-            json.dumps(job.depends_on),
-        )
-        return sql, params
+        return sql, tuple(row.values())
 
     async def dequeue(self, queues: list[str], timeout: float = DEQUEUE_TIMEOUT) -> Job | None:
         """Claim one job.
@@ -402,11 +381,6 @@ class MySQLBroker(SQLBroker):
                 "UPDATE aioq_jobs SET status = 'pending' WHERE id = %s AND status = 'waiting'",
                 (job_id,),
             )
-
-    async def _promote_if_ready(self, job: Job) -> None:
-        if await self._all_deps_completed(job.depends_on):
-            await self._mark_waiting_as_pending(job.id)
-            job.status = JobStatus.pending
 
     # ------------------------------------------------------------------
     # Stats

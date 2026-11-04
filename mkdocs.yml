@@ -70,6 +70,7 @@ nav:
     - TaskDef: reference/taskdef.md
     - BaseBroker: reference/broker.md
     - Worker: reference/worker.md
+  - Development: development.md
 
 plugins:
   - search
